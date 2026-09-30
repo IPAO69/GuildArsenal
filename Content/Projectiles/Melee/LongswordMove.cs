@@ -80,7 +80,7 @@ namespace GuildArsenal.Content.Projectiles.Melee
                     new SwingKeyframe(0f, 0.95f),
                     new SwingKeyframe(0.38f, 1.12f),
                     new SwingKeyframe(1f, 0.95f))
-            }, OverheadSlash),
+            }), // No continuations: this ends the combo and triggers EndCooldownTicks.
             new ComboMove(WideFinisher, new SwingStep
             {
                 // Retained move for future branches; not part of the standard left-click combo.

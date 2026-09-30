@@ -1,4 +1,5 @@
 using Microsoft.Xna.Framework;
+using GuildArsenal.Core.Players;
 using Terraria;
 using Terraria.DataStructures;
 using Terraria.ID;
@@ -27,6 +28,7 @@ namespace GuildArsenal.Content.Items.Weapons.Melee
         }
 
         public sealed override bool CanUseItem(Player player) => player.ownedProjectileCounts[Item.shoot] == 0
+            && player.GetModPlayer<SwingComboPlayer>().CanStartSwing(Item.type, Item.shoot, Main.GameUpdateCount)
             && CanStartSwing(player);
 
         protected virtual bool CanStartSwing(Player player) => true;

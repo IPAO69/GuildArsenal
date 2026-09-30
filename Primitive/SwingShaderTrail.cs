@@ -9,11 +9,21 @@ namespace GuildArsenal.Primitive
     /// <summary>Newest sample first. Length includes the size at the time the pose was recorded.</summary>
     public readonly record struct BladeTrailSample(Vector2 Center, float Rotation, float Length);
 
+    /// <summary>Cache the weapon pose relative to its owner so walking does not stretch the trail.</summary>
+    public readonly record struct BladeTrailPose(Vector2 RelativeCenter, float Rotation, float Scale)
+    {
+        public static BladeTrailPose Capture(Vector2 worldCenter, Vector2 ownerCenter, float rotation, float scale)
+            => new(worldCenter - ownerCenter, rotation, scale);
+
+        public Vector2 GetWorldCenter(Vector2 ownerCenter) => ownerCenter + RelativeCenter;
+        public BladeTrailSample ToSample(Vector2 ownerCenter, float bladeLength)
+            => new(GetWorldCenter(ownerCenter), Rotation, bladeLength * Scale);
+    }
+
     /// <summary>A shader-lit blade ribbon. Only CPU arrays are retained; there are no disposable GPU buffers.</summary>
     public sealed class SwingShaderTrail
     {
         private const int MaxSamples = 256;
-        internal const int ThrustLaneCount = 3;
         internal const int ThrustSamplesPerLane = 17;
         internal const float ThrustHeadFraction = 3f / 16f;
         private readonly VertexPositionColorTexture[] vertices = new VertexPositionColorTexture[MaxSamples * 2];
@@ -34,26 +44,32 @@ namespace GuildArsenal.Primitive
             }
         }
 
-        private void WriteSample(BladeTrailSample sample, float age, int index)
+        internal static void GetSlashEdges(BladeTrailSample sample, Vector2 screenPosition, float startRatio,
+            out Vector2 inner, out Vector2 outer)
         {
+            if (!float.IsFinite(startRatio) || startRatio < 0f || startRatio >= 1f)
+                throw new ArgumentOutOfRangeException(nameof(startRatio));
             Vector2 direction = new(MathF.Cos(sample.Rotation), MathF.Sin(sample.Rotation));
-            Vector2 inner = sample.Center + direction * sample.Length * 0.16f;
-            Vector2 outer = sample.Center + direction * sample.Length;
-            vertices[index * 2] = new VertexPositionColorTexture(new Vector3(inner - Main.screenPosition, 0f),
+            inner = sample.Center + direction * sample.Length * startRatio - screenPosition;
+            outer = sample.Center + direction * sample.Length - screenPosition;
+        }
+
+        private void WriteSample(BladeTrailSample sample, float age, int index, float startRatio)
+        {
+            GetSlashEdges(sample, Main.screenPosition, startRatio, out Vector2 inner, out Vector2 outer);
+            vertices[index * 2] = new VertexPositionColorTexture(new Vector3(inner, 0f),
                 Color.White, new Vector2(age, 0f));
-            vertices[index * 2 + 1] = new VertexPositionColorTexture(new Vector3(outer - Main.screenPosition, 0f),
+            vertices[index * 2 + 1] = new VertexPositionColorTexture(new Vector3(outer, 0f),
                 Color.White, new Vector2(age, 1f));
         }
 
         internal static int BuildThrustRibbon(IReadOnlyList<BladeTrailSample> samples, Vector2 screenPosition,
-            VertexPositionColorTexture[] destination, int lane = 0, int destinationOffset = 0)
+            VertexPositionColorTexture[] destination)
         {
             if (samples.Count < 2)
                 return 0;
             const int segments = ThrustSamplesPerLane - 1;
-            if (lane < -1 || lane > 1)
-                throw new ArgumentOutOfRangeException(nameof(lane));
-            if (destinationOffset < 0 || destinationOffset > destination.Length - ThrustSamplesPerLane * 2)
+            if (destination.Length < ThrustSamplesPerLane * 2)
                 throw new ArgumentException("Thrust ribbon needs at least 34 vertices.", nameof(destination));
 
             BladeTrailSample current = samples[0];
@@ -71,14 +87,10 @@ namespace GuildArsenal.Primitive
             }
 
             // Keep the furthest recent tip during retraction, instead of folding the ribbon over itself.
-            // Three separate lanes: a leading center spear and two shorter flanking spears.
-            // Their spacing keeps each triangular head readable instead of merging into one glow.
-            bool centerLane = lane == 0;
-            float spacing = Math.Max(10f, current.Length * 0.17f);
-            Vector2 head = tip + direction * (farthest + current.Length * (centerLane ? 0.14f : 0.05f))
-                + normal * (lane * spacing);
-            float length = Math.Max(current.Length * (centerLane ? 0.9f : 0.78f), farthest - nearest);
-            float halfWidth = Math.Max(3f, current.Length * (centerLane ? 0.09f : 0.065f));
+            // A single centered spear follows the blade axis, with its bright triangle beyond the tip.
+            Vector2 head = tip + direction * (farthest + current.Length * 0.14f);
+            float length = Math.Max(current.Length * 0.9f, farthest - nearest);
+            float halfWidth = Math.Max(3f, current.Length * 0.09f);
             for (int i = 0; i <= segments; i++)
             {
                 float age = i / (float)segments;
@@ -86,7 +98,7 @@ namespace GuildArsenal.Primitive
                 // Linear tip-to-shoulder edges form an actual triangle, not a rounded spindle.
                 float width = age <= ThrustHeadFraction ? halfWidth * age / ThrustHeadFraction
                     : halfWidth * MathF.Pow((1f - age) / (1f - ThrustHeadFraction), 1.2f);
-                int vertex = destinationOffset + i * 2;
+                int vertex = i * 2;
                 destination[vertex] = new VertexPositionColorTexture(new Vector3(center - normal * width, 0f),
                     Color.White, new Vector2(age, 0f));
                 destination[vertex + 1] = new VertexPositionColorTexture(new Vector3(center + normal * width, 0f),
@@ -96,7 +108,7 @@ namespace GuildArsenal.Primitive
         }
 
         public bool Draw(IReadOnlyList<BladeTrailSample> samples, Effect effect, Color color, float opacity,
-            float edgeSharpness, bool thrust)
+            float edgeSharpness, bool thrust, float startRatio = 0.16f)
         {
             if (Main.dedServ || samples.Count < 2)
                 return false;
@@ -104,13 +116,8 @@ namespace GuildArsenal.Primitive
                 return true;
 
             int count = thrust ? BuildThrustRibbon(samples, Main.screenPosition, vertices) : 0;
-            if (thrust)
-            {
-                BuildThrustRibbon(samples, Main.screenPosition, vertices, -1, count * 2);
-                BuildThrustRibbon(samples, Main.screenPosition, vertices, 1, count * 4);
-            }
             if (!thrust)
-                WriteSample(samples[0], 0f, count++);
+                WriteSample(samples[0], 0f, count++, startRatio);
             for (int i = 1; !thrust && i < samples.Count && count < MaxSamples; i++)
             {
                 BladeTrailSample from = samples[i - 1];
@@ -123,7 +130,7 @@ namespace GuildArsenal.Primitive
                     float t = j / (float)subdivisions;
                     var pose = new BladeTrailSample(Vector2.Lerp(from.Center, to.Center, t),
                         MathHelper.Lerp(from.Rotation, to.Rotation, t), MathHelper.Lerp(from.Length, to.Length, t));
-                    WriteSample(pose, (i - 1f + t) / (samples.Count - 1f), count++);
+                    WriteSample(pose, (i - 1f + t) / (samples.Count - 1f), count++, startRatio);
                 }
             }
 
@@ -148,13 +155,8 @@ namespace GuildArsenal.Primitive
                 foreach (EffectPass pass in effect.CurrentTechnique.Passes)
                 {
                     pass.Apply();
-                    int lanes = thrust ? ThrustLaneCount : 1;
-                    for (int lane = 0; lane < lanes; lane++)
-                    {
-                        // Draw each lane independently; never generate triangles that connect the lanes.
-                        device.DrawUserIndexedPrimitives(PrimitiveType.TriangleList, vertices, lane * count * 2,
-                            count * 2, indices, 0, (count - 1) * 2);
-                    }
+                    device.DrawUserIndexedPrimitives(PrimitiveType.TriangleList, vertices, 0,
+                        count * 2, indices, 0, (count - 1) * 2);
                 }
             }
             finally

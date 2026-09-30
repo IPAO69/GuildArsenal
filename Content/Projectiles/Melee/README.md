@@ -5,8 +5,10 @@
 The mod's first weapon is `LongSword`, using the vanilla Terra Blade sprite.
 Craft it with 20 Wood and 10 Iron/Lead Bars at an Anvil.
 Left click after each attack: OverheadSlash, Thrust, then RisingSlash.
-Holding the button does not repeat attacks. The combo wraps back to the first slash after
-RisingSlash, or resets if more than 90 ticks (1.5 seconds) pass after the previous attack.
+Holding the button does not repeat attacks. RisingSlash ends the combo; after its normal recovery,
+wait 30 fixed ticks (0.5 seconds) before the next click starts a new combo at OverheadSlash.
+The sword stays visible in its final pose throughout this cooldown, with no damage or extra delay.
+An unfinished combo resets if more than 90 ticks (1.5 seconds) pass after the previous attack.
 Tune the three named attacks and their allowed continuations in `LongswordMove.cs`;
 Thrust takes 12 ticks plus 3 recovery ticks before attack-speed modifiers, and has MotionValue 65.
 It holds the blade at the locked aim angle and extends/retracts it with `HoldOffsetCurve`.
@@ -24,7 +26,7 @@ These are the first prototype attacks for the mod's Monster Hunter-inspired weap
 ของ Long Sword ปัจจุบันเชื่อมเป็น:
 
 ```text
-OverheadSlash -> Thrust -> RisingSlash -> OverheadSlash
+OverheadSlash -> Thrust -> RisingSlash -> End -> 0.5s cooldown
 ```
 
 รูปแบบของแต่ละท่าคือ `new ComboMove(ชื่อท่า, ค่าการฟัน, ท่าที่ต่อได้...)`:
@@ -45,7 +47,11 @@ new ComboMove(OverheadSlash, new SwingStep
 เปลี่ยน ID ของท่าแล้วต้องแก้ link ให้ตรงกันด้วย; ชื่อซ้ำหรือ link ไปท่าที่ไม่มีจะตรวจพบเมื่อสร้าง combo
 
 ใช้ `ComboManager.GetAvailableMoves` เพื่อดูท่าที่ต่อได้ และ `ComboDefinition.CanFollow`
-เพื่อตรวจ link ของคู่ท่า ถ้า `NextMoves` ว่างถือว่าจบชุด แล้วการโจมตีครั้งต่อไปจะเริ่มที่ `StartMoveId`
+เพื่อตรวจ link ของคู่ท่า ถ้า `NextMoves` ว่างถือว่าจบชุด เมื่อท่านั้นและ recovery จบ
+จะรอ `ComboDefinition.EndCooldownTicks` (เริ่มต้น 30 ticks = 0.5 วินาที) ก่อนเริ่มใหม่ที่ `StartMoveId`
+เวลานี้คงที่ ไม่หาร attack speed และไม่เกิดระหว่างท่าที่มี continuation; กำหนด 0 เพื่อไม่มี cooldown ได้
+`GetAvailableMoves` จะคืนรายการว่างและ `TryBegin` คืน false ระหว่าง cooldown โดยไม่ต่อเวลาจากการกดซ้ำ
+ผู้ใช้ manager แยกต่างหากต้องเรียก `CompleteMove` หลังท่าและ recovery จบจริง; parent projectile เรียกให้อัตโนมัติ
 เมื่อ combo หมดเวลา ก็เริ่มที่ `StartMoveId` เช่นกัน
 Manager แยกตามผู้เล่น/ชนิดอาวุธ/projectile และการเลือกท่าจริงยัง sync ผ่าน projectile
 
@@ -171,6 +177,7 @@ namespace GuildArsenal.Content.Projectiles.Melee
 | `MotionValue` | ดาเมจท่า = weapon damage × (MotionValue / 100); ค่าเริ่มต้น 100 |
 | `ReverseBladeEdge` | กลับด้านคมดาบตามแนวยาวโดยปลายดาบยังชี้ตามมุมเดิม; ใช้กับ RisingSlash |
 | `TrailEdgeSharpness` | ความคม/ความบางของขอบแสง shader trail; ค่าสูงขอบยิ่งบาง |
+| `TrailStartRatio` | จุดเริ่ม shader ของท่าฟันตามความยาวดาบ; ค่าเริ่มต้น 0.16 เว้นด้าม 16% และวาดส่วนที่เหลือ; ไม่เปลี่ยน Thrust/hitbox |
 | `CollisionWidth` | ความหนา hitbox ก่อนคูณ scale |
 | `CollisionStartRatio` | เริ่ม hitbox ที่ส่วนไหนของความยาวดาบ เช่น 0.1 เว้นด้าม 10% |
 | `HoldOffset` | ระยะห่างจากมือไปยังจุดหมุนของ sprite ก่อนคูณ scale |
@@ -208,12 +215,14 @@ Override `EvaluateRotation(progress)`, `EvaluateScale(progress)` หรือ `E
 
 Trail เริ่มต้นเป็น sprite afterimage ที่เก็บขนาดแต่ละ frame โดยไม่ต้องมี shader
 LongSword เปิด `UseShaderTrail` เพื่อวาด ribbon สีเขียวแบบ additive ด้วย `Assets/Effects/SwingTrail.fx`
+ท่าฟันใช้ trail แบบกว้างตามเดิมด้วย `TrailStartRatio = 0.16f` ไม่จำกัดเฉพาะปลายดาบ
 คลาสลูกอื่นเปิดได้ด้วย `protected override bool UseShaderTrail => true;`
 ปรับสีด้วย `TrailColor`, ความสว่างด้วย `ShaderTrailOpacity` และความยาวด้วย `TrailLength`
-mesh เก็บตำแหน่ง/มุม/ขนาดจริงของแต่ละ frame และแทรกจุดระหว่างมุมเร็วเพื่อลดเหลี่ยม
-ท่าแทงใช้ shader ribbon 3 เส้นตามแนวแทงแทน fan ซึ่งไม่มีพื้นที่เมื่อมุมไม่เปลี่ยน
-เส้นกลางนำหน้าและเส้นข้างสองเส้นสั้นกว่าเล็กน้อย แต่ละเส้นมีหัวสามเหลี่ยมขอบตรงสีขาวอมเขียว
-หัวมีพื้นที่สว่างเต็ม ไม่ใช้ลายคลื่นของท่าฟัน; แต่ละเส้นวาดแยกกันเพื่อไม่ให้ mesh เชื่อมข้ามเส้น
+mesh เก็บตำแหน่ง relative ต่อผู้เล่น พร้อมมุม/ขนาดของแต่ละ frame และแทรกจุดระหว่างมุมเร็วเพื่อลดเหลี่ยม
+ตอนวาดทุก pose ใช้ตำแหน่งผู้เล่นปัจจุบันร่วมกัน ทำให้ trail เคลื่อนตามตัวโดยไม่ยืดหรือเบี้ยวจากการเดิน
+ยังคง motion ของดาบ เช่น มุมฟัน ขนาด และการยืด/ถอน Thrust; ไม่เปลี่ยน hitbox หรือดาเมจ
+ท่าแทงใช้ shader ribbon เส้นกลางเพียงเส้นเดียวตามแนวดาบแทน fan ซึ่งไม่มีพื้นที่เมื่อมุมไม่เปลี่ยน
+หัวสามเหลี่ยมขอบตรงสีขาวอมเขียวมีพื้นที่สว่างเต็ม ไม่ใช้ลายคลื่นของท่าฟัน และไม่มีเส้นข้าง
 ขยายแสงให้พ้นด้านข้างและปลาย sprite ดาบ พร้อมเก็บตำแหน่งปลายที่แทงไกลสุดจากประวัติช่วงสั้น ๆ
 จึงยังเห็นรอยแทงตอนถอนดาบโดย mesh ไม่พับทับตัวเอง; แสงเริ่มช่วงออกแรงและจางระหว่างถอน
 shader ทำขอบแสงขาวอมเขียวและไล่จางไปยังหาง; ไม่โหลด asset บน dedicated server
@@ -231,7 +240,12 @@ weapon damage ในที่นี้คือ damage ที่ item ส่ง�
 ไม่แก้ `Item.damage` และไม่คูณ `Projectile.damage` ซ้ำ; เกราะ, damage variance และ crit ยังผ่านระบบเกม
 ตัวอย่าง damage 38: MV 100 = 38, MV 65 = 24.7, MV 105 = 39.9 ก่อนระบบเกมปัดเศษ/คิดเกราะ/crit
 
-RisingSlash ใช้ 20 ticks + recovery 4, มุม +75 ถึง -115 องศา,
+RisingSlash ใช้ 20 ticks + recovery 4 ตามเดิม, มุม +75 ถึง -115 องศา,
+แล้วพักท้าย combo อีก 30 ticks คงที่ (0.5 วินาที) ก่อนเริ่ม combo ใหม่
+ดาบและแขนค้างมุม/ขนาด/ระยะของ frame สุดท้ายจนจบ cooldown นี้ โดยยังเคลื่อนตามตัวผู้เล่น
+held projectile อยู่ต่อระหว่าง cooldown แต่ไม่มีดาเมจ และไม่เริ่ม cooldown ซ้ำเมื่อ projectile หาย
+`ComboRecoveryDuration` / `IsInComboRecovery` แยกช่วงพักท้ายชุดจาก recovery ปกติ
+ใช้ `OnComboRecoveryUpdate(progress)` สำหรับเอฟเฟกต์ช่วงพักท้ายชุด โดย progress อยู่ใน 0..1
 ง้างถึงเวลา 0.22 แล้วเร่งฟันขึ้นถึง 93% ของ arc ที่เวลา 0.52
 กลับด้านคมดาบด้วย `ReverseBladeEdge = true` โดยไม่เปลี่ยนทิศปลายดาบ/hitbox
 และใช้ `TrailEdgeSharpness = 110` ให้ขอบ trail บางกว่าท่าอื่น

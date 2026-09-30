@@ -47,9 +47,12 @@ namespace GuildArsenal.Content.Projectiles.Melee
         public int WeaponItemType { get; private set; }
         public int SwingDuration { get; private set; }
         public int RecoveryDuration { get; private set; }
-        public float SwingProgress => initialized ? Math.Clamp(elapsed / SwingDuration, 0f, 1f) : 0f;
-        public bool IsSwinging => initialized && elapsed <= SwingDuration;
+        public int ComboRecoveryDuration { get; private set; }
+        private SwingTiming Timing => new(SwingDuration, RecoveryDuration, ComboRecoveryDuration);
+        public float SwingProgress => initialized ? Timing.SwingProgress(elapsed) : 0f;
+        public bool IsSwinging => initialized && Timing.IsSwinging(elapsed);
         public bool IsRecovering => initialized && elapsed > SwingDuration;
+        public bool IsInComboRecovery => initialized && Timing.IsComboRecovery(elapsed);
         public float BladeRotation { get; private set; }
         protected SwingStep CurrentStep { get; private set; }
         protected float AimRotation { get; private set; }
@@ -59,6 +62,7 @@ namespace GuildArsenal.Content.Projectiles.Melee
         private bool initialized;
         private bool soundPlayed;
         private bool swingFinished;
+        private bool moveCompleted;
         private float elapsed;
         private ComboDefinition comboDefinition;
         private float previousProgress;
@@ -66,10 +70,9 @@ namespace GuildArsenal.Content.Projectiles.Melee
         private float baseBladeLength;
         private Vector2 bladeAnchor;
         private Vector2 previousAnchor;
-        private readonly List<SwingPose> trail = new();
+        private readonly List<BladeTrailPose> trail = new();
         private SwingShaderTrail shaderTrail;
         private readonly List<BladeTrailSample> shaderSamples = new();
-        private readonly record struct SwingPose(Vector2 Center, float Rotation, float Scale);
 
         public sealed override void SetStaticDefaults()
         {
@@ -124,6 +127,7 @@ namespace GuildArsenal.Content.Projectiles.Melee
                 ? Math.Max(0.01f, Owner.GetTotalAttackSpeed(Projectile.DamageType)) : 1f;
             SwingDuration = Math.Max(1, (int)MathF.Round((CurrentStep.DurationTicks ?? Math.Max(1, weapon.useTime)) / speed));
             RecoveryDuration = CurrentStep.RecoveryTicks == 0 ? 0 : Math.Max(1, (int)MathF.Round(CurrentStep.RecoveryTicks / speed));
+            ComboRecoveryDuration = comboDefinition.Moves[ComboIndex].IsTerminal ? comboDefinition.EndCooldownTicks : 0;
 
             Texture2D texture = GetDrawTexture();
             baseBladeLength = BladeLength ?? new Vector2(texture.Width, texture.Height).Length();
@@ -150,7 +154,9 @@ namespace GuildArsenal.Content.Projectiles.Melee
             writer.Write(baseBladeLength);
             writer.Write(SwingDuration);
             writer.Write(RecoveryDuration);
+            writer.Write(ComboRecoveryDuration);
             writer.Write(elapsed);
+            writer.Write(moveCompleted);
             WriteSwingExtraAI(writer);
         }
 
@@ -167,7 +173,9 @@ namespace GuildArsenal.Content.Projectiles.Melee
             baseBladeLength = reader.ReadSingle();
             SwingDuration = reader.ReadInt32();
             RecoveryDuration = reader.ReadInt32();
+            ComboRecoveryDuration = reader.ReadInt32();
             elapsed = reader.ReadSingle();
+            moveCompleted = reader.ReadBoolean();
             comboDefinition = Combo ?? ComboDefinition.CreateLinear(ComboSteps, ComboResetTicks);
             if (ComboIndex < 0 || ComboIndex >= comboDefinition.Moves.Count)
             {
@@ -204,7 +212,18 @@ namespace GuildArsenal.Content.Projectiles.Melee
 
             RememberPreviousPose();
             elapsed += 1f / (Projectile.extraUpdates + 1);
-            if (elapsed > SwingDuration + RecoveryDuration)
+            if (!moveCompleted && elapsed > Timing.NormalEnd)
+            {
+                // Start the existing cooldown once, but keep the held sword visible until it expires.
+                moveCompleted = true;
+                if (Projectile.owner == Main.myPlayer)
+                {
+                    Owner.GetModPlayer<SwingComboPlayer>().CompleteSwing(WeaponItemType, Type,
+                        comboDefinition, CurrentMoveId, Main.GameUpdateCount);
+                    Projectile.netUpdate = true;
+                }
+            }
+            if (Timing.HasExpired(elapsed))
             {
                 Projectile.Kill();
                 return;
@@ -225,7 +244,8 @@ namespace GuildArsenal.Content.Projectiles.Melee
             {
                 if (!Main.dedServ && TrailLength > 0)
                 {
-                    trail.Insert(0, new SwingPose(Projectile.Center, BladeRotation, Projectile.scale));
+                    // Store only the weapon's motion. Player translation is applied uniformly when drawing.
+                    trail.Insert(0, BladeTrailPose.Capture(Projectile.Center, Owner.MountedCenter, BladeRotation, Projectile.scale));
                     while (trail.Count > TrailLength)
                         trail.RemoveAt(trail.Count - 1);
                 }
@@ -239,8 +259,10 @@ namespace GuildArsenal.Content.Projectiles.Melee
                 swingFinished = true;
                 OnSwingFinished();
             }
-            if (IsRecovering)
-                OnRecoveryUpdate((elapsed - SwingDuration) / Math.Max(1, RecoveryDuration));
+            if (IsInComboRecovery)
+                OnComboRecoveryUpdate(Timing.ComboRecoveryProgress(elapsed));
+            else if (IsRecovering)
+                OnRecoveryUpdate(Math.Clamp((elapsed - SwingDuration) / Math.Max(1, RecoveryDuration), 0f, 1f));
         }
 
         private void RememberPreviousPose()
@@ -279,6 +301,7 @@ namespace GuildArsenal.Content.Projectiles.Melee
         protected virtual void OnSwingUpdate(float progress) { }
         protected virtual void OnSwingFinished() { }
         protected virtual void OnRecoveryUpdate(float progress) { }
+        protected virtual void OnComboRecoveryUpdate(float progress) { }
 
         public override bool? CanDamage() => IsSwinging && CurrentStep.MotionValue > 0f
             && CurrentStep.TryGetDamageWindow(previousProgress, SwingProgress, out _, out _) ? null : false;
@@ -374,22 +397,22 @@ namespace GuildArsenal.Content.Projectiles.Melee
             {
                 shaderTrail ??= new SwingShaderTrail(); // Allocate ribbon arrays only for clients that draw this trail.
                 shaderSamples.Clear();
-                foreach (SwingPose pose in trail)
-                    shaderSamples.Add(new BladeTrailSample(pose.Center, pose.Rotation, baseBladeLength * pose.Scale));
+                foreach (BladeTrailPose pose in trail)
+                    shaderSamples.Add(pose.ToSample(Owner.MountedCenter, baseBladeLength));
                 bool thrust = MathF.Abs(CurrentStep.EndAngleDegrees - CurrentStep.StartAngleDegrees) < 0.01f;
                 // Fade out during follow-through/recovery instead of leaving a stationary bright fan.
                 float fade = Math.Clamp((1f - SwingProgress) / Math.Max(0.01f, 1f - CurrentStep.DamageEnd), 0f, 1f);
                 if (thrust)
                     fade *= Math.Clamp((SwingProgress - CurrentStep.DamageStart) / 0.08f, 0f, 1f);
                 if (shaderTrail.Draw(shaderSamples, effect, TrailColor, ShaderTrailOpacity * fade,
-                    CurrentStep.TrailEdgeSharpness, thrust))
+                    CurrentStep.TrailEdgeSharpness, thrust, CurrentStep.TrailStartRatio))
                     return;
             }
             for (int i = trail.Count - 1; i >= 0; i--)
             {
-                SwingPose pose = trail[i];
+                BladeTrailPose pose = trail[i];
                 float opacity = TrailOpacity * (1f - (i + 1f) / (trail.Count + 1f));
-                Main.EntitySpriteDraw(texture, pose.Center - Main.screenPosition, null, TrailColor * opacity,
+                Main.EntitySpriteDraw(texture, pose.GetWorldCenter(Owner.MountedCenter) - Main.screenPosition, null, TrailColor * opacity,
                     pose.Rotation + SpriteRotationOffset, origin, pose.Scale, DrawEffects);
             }
         }

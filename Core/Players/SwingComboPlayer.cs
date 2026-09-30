@@ -28,6 +28,16 @@ namespace GuildArsenal.Core.Players
                 manager.Touch(tick);
         }
 
+        internal bool CanStartSwing(int itemType, int projectileType, ulong tick)
+            => !combos.TryGetValue((itemType, projectileType), out ComboManager manager)
+                || manager.GetRemainingCooldownTicks(tick) == 0;
+
+        internal void CompleteSwing(int itemType, int projectileType, ComboDefinition definition, string moveId, ulong tick)
+        {
+            if (combos.TryGetValue((itemType, projectileType), out ComboManager manager))
+                manager.CompleteMove(definition, moveId, tick);
+        }
+
         public void ResetCombo(int itemType, int projectileType) => combos.Remove((itemType, projectileType));
     }
 }

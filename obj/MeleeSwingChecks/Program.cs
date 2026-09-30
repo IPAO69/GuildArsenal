@@ -98,20 +98,26 @@ internal static class Program
         Equal(longSwordCombo.Begin(sword, 35), 1, "Long Sword second click is Thrust");
         longSwordCombo.Touch(61);
         Equal(longSwordCombo.Begin(sword, 66), 2, "Long Sword third click is RisingSlash");
-        longSwordCombo.Touch(108);
-        Equal(longSwordCombo.Begin(sword, 113), 0, "Long Sword wraps after RisingSlash");
-        longSwordCombo.Touch(143);
-        Equal(longSwordCombo.Begin(sword, 234), 0, "Long Sword resets after inactivity");
+        Check(longSwordCombo.CompleteMove(sword, LongswordMove.RisingSlash, 108), "RisingSlash completes the combo");
+        Equal(longSwordCombo.GetRemainingCooldownTicks(108), 30f, "Long Sword end delay is half a second");
+        Check(!longSwordCombo.TryBegin(sword, 113, out _), "Cannot start OverheadSlash during end delay");
+        Check(!longSwordCombo.TryBegin(sword, 137, out _), "Long Sword stays blocked until all 30 ticks pass");
+        Equal(longSwordCombo.Begin(sword, 138), 0, "Next click opens a new combo after the delay");
+        longSwordCombo.Touch(168);
+        Equal(longSwordCombo.Begin(sword, 259), 0, "Long Sword resets after inactivity");
         Check(sword.Steps[0].EndAngleDegrees > sword.Steps[0].StartAngleDegrees, "first attack cuts down");
         Check(sword.Steps[2].EndAngleDegrees < sword.Steps[2].StartAngleDegrees, "third attack cuts up");
         Check(sword.CanFollow(LongswordMove.OverheadSlash, LongswordMove.Thrust), "overhead-to-thrust link");
         Check(sword.CanFollow(LongswordMove.Thrust, LongswordMove.RisingSlash), "thrust-to-rising link");
-        Check(sword.CanFollow(LongswordMove.RisingSlash, LongswordMove.OverheadSlash), "rising-to-overhead link");
+        Check(!sword.CanFollow(LongswordMove.RisingSlash, LongswordMove.OverheadSlash), "RisingSlash does not loop back to OverheadSlash");
+        Check(sword.GetMove(LongswordMove.RisingSlash).IsTerminal, "RisingSlash is a terminal move");
         Check(!sword.CanFollow(LongswordMove.OverheadSlash, LongswordMove.RisingSlash), "cannot skip Thrust");
         Check(!sword.CanFollow(LongswordMove.RisingSlash, LongswordMove.WideFinisher), "wide slash is outside left-click loop");
         SwingStep thrust = sword.GetMove(LongswordMove.Thrust).Swing;
         SwingStep overhead = sword.GetMove(LongswordMove.OverheadSlash).Swing;
         SwingStep rising = sword.GetMove(LongswordMove.RisingSlash).Swing;
+        Equal(rising.RecoveryTicks, 4f, "RisingSlash normal recovery is restored");
+        Equal(rising.DurationTicks.Value, 20f, "Separate end cooldown preserves RisingSlash attack duration");
         Check(thrust.DurationTicks + thrust.RecoveryTicks < overhead.DurationTicks + overhead.RecoveryTicks
             && thrust.DurationTicks + thrust.RecoveryTicks < rising.DurationTicks + rising.RecoveryTicks, "Thrust is faster than both slashes");
         Check(thrust.MotionValue < overhead.MotionValue && thrust.MotionValue < rising.MotionValue,
@@ -163,12 +169,16 @@ internal static class Program
         }
         TestGraphTransitions();
         TestThrustTrail();
+        TestTrailOwnerMovement();
+        TestEndCooldown();
+        TestWideSlashTrail();
+        TestHeldComboRecovery();
         Console.WriteLine($"PASS: {checks} swing curve/combo checks. Swing parent classes compiled against installed tModLoader.");
     }
 
     private static void TestThrustTrail()
     {
-        var mesh = new VertexPositionColorTexture[34];
+        var mesh = new VertexPositionColorTexture[SwingShaderTrail.ThrustSamplesPerLane * 2];
         // Include repeated poses (hold) and a reversal (withdrawal). The new mesh must not fold.
         foreach (float rotation in new[] { 0f, MathF.PI, MathF.PI / 2f, -0.7f })
         {
@@ -184,12 +194,19 @@ internal static class Program
             };
             var camera = new Vector2(80f, 55f);
             int count = SwingShaderTrail.BuildThrustRibbon(history, camera, mesh);
-            Equal(count, 17f, "Thrust has a non-degenerate longitudinal mesh");
+            Equal(count, 17f, "Thrust builds only one ribbon");
             Vector2 head = new(mesh[0].Position.X, mesh[0].Position.Y);
-            Equal(Vector2.Dot(head + camera - current, direction), 181.2f,
-                "Thrust glow reaches beyond furthest recent tip when retracting");
-            Equal(Vector3.Distance(mesh[0].Position, mesh[1].Position), 0f, "Thrust head tapers to a point");
+            Equal(Vector2.Dot(head + camera - current, direction), 189.6f,
+                "Thrust head reaches beyond the furthest recent tip");
+            Equal(Vector2.Dot(head + camera - current, normal), 0f, "Thrust head stays centered on the blade axis");
+            Equal(Vector3.Distance(mesh[0].Position, mesh[1].Position), 0f, "Thrust head is a sharp point");
             Equal(Vector3.Distance(mesh[32].Position, mesh[33].Position), 0f, "Thrust tail tapers to a point");
+            float shoulderWidth = Vector3.Distance(mesh[6].Position, mesh[7].Position);
+            Equal(shoulderWidth, 25.2f, "Triangle shoulder keeps its visible width");
+            Equal(Vector3.Distance(mesh[2].Position, mesh[3].Position), shoulderWidth / 3f,
+                "Triangle head has straight edges at first subdivision");
+            Equal(Vector3.Distance(mesh[4].Position, mesh[5].Position), shoulderWidth * 2f / 3f,
+                "Triangle head has straight edges at second subdivision");
             float previous = float.PositiveInfinity;
             for (int i = 0; i < count; i++)
             {
@@ -204,8 +221,6 @@ internal static class Program
                 Equal(left.TextureCoordinate.X, i / 16f, "Thrust fade coordinates progress by distance");
                 previous = along;
             }
-            Check(Vector3.Distance(mesh[16].Position, mesh[17].Position) > 28f,
-                "Thrust body is wide enough to glow outside the sword sprite");
         }
         Equal(SwingShaderTrail.BuildThrustRibbon(Array.Empty<BladeTrailSample>(), Vector2.Zero, mesh), 0f,
             "Empty thrust history produces no mesh");
@@ -215,6 +230,49 @@ internal static class Program
         }, Vector2.Zero, new VertexPositionColorTexture[2]), "Thrust rejects an undersized destination");
     }
 
+    private static void TestTrailOwnerMovement()
+    {
+        foreach (float rotation in new[] { 0f, MathF.PI, MathF.PI / 2f, -0.7f })
+        {
+            Vector2 direction = new(MathF.Cos(rotation), MathF.Sin(rotation));
+            Vector2 drawOwner = new(300f, 200f);
+            Vector2 walk = new(35f, -27f);
+            var stationary = new BladeTrailSample[4];
+            var moving = new BladeTrailSample[4];
+            for (int i = 0; i < stationary.Length; i++)
+            {
+                // Different player positions at every cached instant must not survive into the ribbon.
+                Vector2 recordedOwner = new(100f + 19f * i, 120f - 13f * i);
+                Vector2 relative = direction * (42f - 20f * i);
+                var pose = BladeTrailPose.Capture(recordedOwner + relative, recordedOwner, rotation, 1f);
+                Equal(Vector2.Distance(pose.RelativeCenter, relative), 0f, "Cached pose excludes player movement");
+                stationary[i] = pose.ToSample(drawOwner, 140f);
+                moving[i] = pose.ToSample(drawOwner + walk, 140f);
+                Equal(Vector2.Distance(stationary[i].Center, drawOwner + relative), 0f, "Every trail pose shares the current player origin");
+                Equal(Vector2.Distance(moving[i].Center - stationary[i].Center, walk), 0f,
+                    "Player movement translates all cached poses equally");
+                Equal(moving[i].Rotation, rotation, "Walking preserves blade angle");
+                Equal(moving[i].Length, 140f, "Walking preserves blade length");
+            }
+            var stationaryMesh = new VertexPositionColorTexture[34];
+            var movingMesh = new VertexPositionColorTexture[34];
+            SwingShaderTrail.BuildThrustRibbon(stationary, Vector2.Zero, stationaryMesh);
+            SwingShaderTrail.BuildThrustRibbon(moving, Vector2.Zero, movingMesh);
+            for (int i = 0; i < stationaryMesh.Length; i++)
+            {
+                Equal(Vector3.Distance(movingMesh[i].Position - stationaryMesh[i].Position, new Vector3(walk, 0f)), 0f,
+                    "Walking translates the Thrust mesh without skewing it");
+                Equal(Vector2.Distance(movingMesh[i].TextureCoordinate, stationaryMesh[i].TextureCoordinate), 0f,
+                    "Walking preserves shader fade coordinates");
+            }
+        }
+        var scaledPose = BladeTrailPose.Capture(new Vector2(25f, 30f), new Vector2(10f, 10f), -0.5f, 1.25f);
+        Equal(scaledPose.ToSample(new Vector2(80f, 90f), 100f).Length, 125f,
+            "Owner-relative cache preserves historical weapon scale");
+        Equal(Vector2.Distance(scaledPose.GetWorldCenter(new Vector2(80f, 90f)), new Vector2(95f, 110f)), 0f,
+            "Afterimages use the same owner-relative anchor as shader trails");
+    }
+
     private static void TestGraphTransitions()
     {
         // Deliberately reordered nodes: behavior must depend on links, not array order.
@@ -222,7 +280,7 @@ internal static class Program
         var graph = new ComboDefinition("A", 90,
             new ComboMove("C", new SwingStep()),
             new ComboMove("A", new SwingStep(), links),
-            new ComboMove("B", new SwingStep(), "B"));
+            new ComboMove("B", new SwingStep(), "B")) { EndCooldownTicks = 0 };
         links[0] = "C";
         var manager = new ComboManager();
         Check(manager.GetAvailableMoves(graph, 0).Count == 1, "only entry is allowed before a combo starts");
@@ -240,6 +298,8 @@ internal static class Program
         Equal(manager.Begin(graph, 112), 1, "invalid request does not extend timeout");
         Equal(manager.Begin(graph, 113, "C"), 0, "explicit branch selection");
         Check(manager.CurrentMoveId == "C", "named move survives index conversion used for sync");
+        Check(manager.CompleteMove(graph, "C", 113), "Terminal completion is reported");
+        Equal(manager.GetRemainingCooldownTicks(113), 0f, "Zero end delay remains configurable");
         Equal(manager.Begin(graph, 114), 1, "terminal move starts a fresh combo");
         Check(!manager.TryBegin(graph, 115, out _, "Unknown"), "unknown requested move rejected");
         manager.Reset();
@@ -258,6 +318,128 @@ internal static class Program
         Equal(fallback.Begin(rebuilt, 0), 0, "legacy sequential opener");
         Equal(fallback.Begin(ComboDefinition.CreateLinear(new[] { new SwingStep(), new SwingStep(), new SwingStep() }, 90), 1), 1,
             "rebuilding legacy definitions does not reset combo state");
+    }
+
+    private static void TestEndCooldown()
+    {
+        var graph = new ComboDefinition("A", 90,
+            new ComboMove("A", new SwingStep(), "B"), new ComboMove("B", new SwingStep()));
+        Equal(graph.EndCooldownTicks, 30f, "Terminal delay defaults to 30 fixed game ticks");
+        var manager = new ComboManager();
+        Equal(manager.Begin(graph, 100), 0f, "Cooldown test opener");
+        Check(manager.CompleteMove(graph, "A", 110), "Nonterminal move completion succeeds");
+        Equal(manager.GetRemainingCooldownTicks(110), 0f, "No extra delay between linked moves");
+        Equal(manager.Begin(graph, 111), 1f, "Continuation remains available immediately");
+        Check(!manager.CompleteMove(graph, "A", 112), "A stale projectile cannot finish the current move");
+        Equal(manager.GetRemainingCooldownTicks(140), 0f, "No cooldown while the terminal attack or normal recovery runs");
+        Check(manager.CompleteMove(graph, "B", 150), "Natural terminal completion starts cooldown");
+        Equal(manager.GetRemainingCooldownTicks(150), 30f, "Cooldown begins at completion, not at attack start");
+        Check(manager.GetAvailableMoves(graph, 150).Count == 0, "No available moves during cooldown");
+        Check(!manager.TryBegin(graph, 150, out int blockedIndex) && blockedIndex == -1, "Empty available list safely rejects default input");
+        Check(!manager.TryBegin(graph, 160, out _, "A"), "Explicit entry requests cannot bypass cooldown");
+        Check(manager.CurrentMoveId == "B", "Rejected input preserves the finishing move");
+        Check(!manager.CompleteMove(graph, "B", 160), "Duplicate finish calls do not restart cooldown");
+        manager.Touch(170);
+        Equal(manager.GetRemainingCooldownTicks(179), 1f, "Touch and rejected input cannot prolong cooldown");
+        Check(!manager.TryBegin(graph, 179, out _), "Last cooldown tick is still blocked");
+        Equal(manager.Begin(graph, 180), 0f, "New combo starts at the exact cooldown boundary");
+
+        var independent = new ComboManager();
+        Equal(independent.Begin(graph, 160), 0f, "Other players or weapons do not inherit cooldown");
+        manager.Begin(graph, 200);
+        manager.CompleteMove(graph, "B", 210);
+        manager.Reset();
+        Equal(manager.GetRemainingCooldownTicks(211), 0f, "Reset clears end cooldown");
+        Equal(manager.Begin(graph, 211), 0f, "Reset allows a fresh opener");
+        manager.Begin(graph, 212);
+        manager.CompleteMove(graph, "B", 220);
+        Equal(manager.GetRemainingCooldownTicks(1), 0f, "World clock rollback clears cooldown safely");
+        Equal(manager.Begin(graph, 1), 0f, "Clock rollback allows a fresh opener");
+        Equal(manager.GetRemainingCooldownTicks(225), 0f, "A cleared cooldown cannot reactivate later");
+
+        var shortReset = new ComboDefinition("Only", 0, new ComboMove("Only", new SwingStep()));
+        var single = new ComboManager();
+        single.Begin(shortReset, 10);
+        single.CompleteMove(shortReset, "Only", 20);
+        Check(!single.TryBegin(shortReset, 21, out _), "Combo inactivity timeout cannot bypass end cooldown");
+        Equal(single.Begin(shortReset, 50), 0f, "Single-move terminal combo resumes after 30 ticks");
+        single.CompleteMove(shortReset, "Only", ulong.MaxValue - 10);
+        Equal(single.GetRemainingCooldownTicks(ulong.MaxValue), 20f, "Cooldown safely handles large world timestamps");
+        Equal(single.GetRemainingCooldownTicks(0), 0f, "Timestamp wrap does not underflow cooldown");
+
+        var longer = new ComboDefinition("Only", 90, new ComboMove("Only", new SwingStep())) { EndCooldownTicks = 60 };
+        var configurable = new ComboManager();
+        configurable.Begin(longer, 0);
+        configurable.CompleteMove(longer, "Only", 1);
+        Equal(configurable.GetRemainingCooldownTicks(31), 30f, "End cooldown can be tuned per weapon definition");
+        Throws<ArgumentOutOfRangeException>(() => new ComboDefinition("Only", 90, new ComboMove("Only", new SwingStep()))
+            { EndCooldownTicks = -1 }, "Negative end cooldown rejected");
+    }
+
+    private static void TestHeldComboRecovery()
+    {
+        ComboDefinition sword = LongswordMove.Combo;
+        SwingStep rising = sword.GetMove(LongswordMove.RisingSlash).Swing;
+        var timing = new SwingTiming(rising.DurationTicks.Value, rising.RecoveryTicks, sword.EndCooldownTicks);
+        Equal(timing.NormalEnd, 24f, "Normal RisingSlash recovery remains unchanged");
+        Equal(timing.TotalEnd, 54f, "Sword lifetime includes the existing 30-tick combo recovery once");
+        Check(!timing.IsComboRecovery(24f), "Terminal hold does not start before normal recovery ends");
+        Check(!timing.HasExpired(54f) && timing.HasExpired(55f), "Sword survives until the final combo-recovery tick");
+        for (int tick = 25; tick <= 54; tick++)
+        {
+            Check(timing.IsComboRecovery(tick), "Sword remains held throughout combo recovery");
+            Check(!timing.IsSwinging(tick), "Held recovery cannot deal attack damage");
+            Equal(timing.SwingProgress(tick), 1f, "Swing animation stays at its final frame");
+            Equal(rising.EvaluateAngleDegrees(timing.SwingProgress(tick)), rising.EndAngleDegrees,
+                "Held sword preserves its final angle");
+            Equal(rising.EvaluateScale(timing.SwingProgress(tick)), rising.EvaluateScale(1f),
+                "Held sword preserves its final size");
+            Equal(rising.EvaluateHoldOffset(timing.SwingProgress(tick)), rising.EvaluateHoldOffset(1f),
+                "Held sword preserves its final hand offset");
+            Check(timing.ComboRecoveryProgress(tick) >= 0f && timing.ComboRecoveryProgress(tick) <= 1f,
+                "Combo recovery hook progress stays normalized");
+        }
+        var manager = new ComboManager();
+        manager.Begin(sword, 0);
+        manager.Begin(sword, 31);
+        manager.Begin(sword, 47);
+        manager.CompleteMove(sword, LongswordMove.RisingSlash, 72);
+        for (int tick = 72; tick < 102; tick++)
+        {
+            manager.Touch((ulong)tick); // Held projectile continues ticking during the existing cooldown.
+            Check(!manager.TryBegin(sword, (ulong)tick, out _), "Held updates cannot restart or shorten cooldown");
+        }
+        Equal(manager.Begin(sword, 102), 0f, "New combo is available without a second cooldown");
+        var linked = new SwingTiming(26, 4, 0);
+        Check(!linked.IsComboRecovery(31f) && linked.HasExpired(31f), "Nonterminal attacks keep their original lifetime");
+        foreach (int attackTicks in new[] { 5, 10, 20, 40 })
+        {
+            var scaled = new SwingTiming(attackTicks, 2, 30);
+            Equal(scaled.TotalEnd - scaled.NormalEnd, 30f, "Attack speed cannot shorten the terminal hold");
+        }
+    }
+
+    private static void TestWideSlashTrail()
+    {
+        Equal(new SwingStep().TrailStartRatio, 0.16f, "Slash shader restores its original wide blade coverage");
+        foreach (float rotation in new[] { 0f, MathF.PI, MathF.PI / 2f, -0.7f })
+        foreach (float scale in new[] { 0.7f, 1f, 1.8f })
+        {
+            Vector2 center = new(300f, 200f);
+            Vector2 camera = new(80f, 55f);
+            Vector2 direction = new(MathF.Cos(rotation), MathF.Sin(rotation));
+            var sample = new BladeTrailSample(center, rotation, 140f * scale);
+            SwingShaderTrail.GetSlashEdges(sample, camera, 0.16f, out Vector2 inner, out Vector2 outer);
+            Equal(Vector2.Distance(inner + camera, center), sample.Length * 0.16f, "Slash trail starts just beyond the hilt");
+            Equal(Vector2.Distance(outer + camera, center), sample.Length, "Slash trail ends at the actual blade tip");
+            Equal(Vector2.Distance(inner, outer), sample.Length * 0.84f, "Wide trail scales with weapon size");
+            Equal(Vector2.Distance(outer - inner, direction * sample.Length * 0.84f), 0f, "Wide trail follows the blade at any angle");
+        }
+        Throws<InvalidOperationException>(() => new SwingStep { TrailStartRatio = 1f }.Validate(), "Empty tip band rejected");
+        Throws<InvalidOperationException>(() => new SwingStep { TrailStartRatio = -0.1f }.Validate(), "Negative tip band rejected");
+        Throws<InvalidOperationException>(() => new SwingStep { TrailStartRatio = float.NaN }.Validate(), "NaN tip band rejected");
+        Throws<ArgumentOutOfRangeException>(() => SwingShaderTrail.GetSlashEdges(new BladeTrailSample(Vector2.Zero, 0f, 100f),
+            Vector2.Zero, float.PositiveInfinity, out _, out _), "Invalid tip band rejected by geometry builder");
     }
 
     private static void Equal(float actual, float expected, string name) => Check(MathF.Abs(actual - expected) < 0.0001f, name);

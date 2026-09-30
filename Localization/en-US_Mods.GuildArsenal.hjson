@@ -9,6 +9,7 @@ Mods: {
 					Left click: overhead slash, thrust, rising slash
 					Click again after each attack to continue the combo
 					Thrust is a quick forward stab with reduced damage
+					Rising slash ends the combo; wait 0.5 seconds before starting a new combo
 					The combo resets after 1.5 seconds without attacking
 					'''
 			}

@@ -78,6 +78,18 @@ namespace GuildArsenal.Content.Projectiles.Melee
         }
     }
 
+    /// <summary>The terminal hold overlaps the combo cooldown; it is not another recovery delay.</summary>
+    internal readonly record struct SwingTiming(int SwingTicks, int RecoveryTicks, int ComboRecoveryTicks)
+    {
+        public float NormalEnd => (float)SwingTicks + RecoveryTicks;
+        public float TotalEnd => NormalEnd + ComboRecoveryTicks;
+        public float SwingProgress(float elapsed) => Math.Clamp(elapsed / SwingTicks, 0f, 1f);
+        public bool IsSwinging(float elapsed) => elapsed <= SwingTicks;
+        public bool IsComboRecovery(float elapsed) => ComboRecoveryTicks > 0 && elapsed > NormalEnd && elapsed <= TotalEnd;
+        public bool HasExpired(float elapsed) => elapsed > TotalEnd;
+        public float ComboRecoveryProgress(float elapsed) => Math.Clamp((elapsed - NormalEnd) / Math.Max(1, ComboRecoveryTicks), 0f, 1f);
+    }
+
     /// <summary>One attack in a combo. Angles are degrees relative to the locked aim direction.</summary>
     public sealed class SwingStep
     {
@@ -106,6 +118,8 @@ namespace GuildArsenal.Content.Projectiles.Melee
         public bool ReverseBladeEdge { get; init; }
         /// <summary>Higher values make the shader's bright outer edge thinner and sharper.</summary>
         public float TrailEdgeSharpness { get; init; } = 48f;
+        /// <summary>Radial start of the slash shader: 0.16 leaves the hilt clear and covers most of the blade.</summary>
+        public float TrailStartRatio { get; init; } = 0.16f;
 
         /// <summary>Blade thickness in pixels before scaling; origin-to-tip length is set on the projectile.</summary>
         public float CollisionWidth { get; init; } = 18f;
@@ -142,6 +156,7 @@ namespace GuildArsenal.Content.Projectiles.Melee
                 || DamageStart < 0f || DamageEnd > 1f || DamageStart > DamageEnd
                 || !float.IsFinite(MotionValue) || MotionValue < 0f
                 || !float.IsFinite(TrailEdgeSharpness) || TrailEdgeSharpness <= 0f
+                || !float.IsFinite(TrailStartRatio) || TrailStartRatio < 0f || TrailStartRatio >= 1f
                 || !float.IsFinite(CollisionWidth) || CollisionWidth <= 0f
                 || !float.IsFinite(CollisionStartRatio) || CollisionStartRatio < 0f || CollisionStartRatio > 1f
                 || !float.IsFinite(HoldOffset) || !float.IsFinite(SoundAt) || SoundAt < 0f || SoundAt > 1f)
