@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <LangVersion>12.0</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <BuildMod>false</BuildMod>
+  </PropertyGroup>
+  <Import Project="../../../tModLoader.targets" />
+  <ItemGroup>
+    <Reference Update="$(tMLLibraryPath)/FNA/**/*.dll" Private="true" />
+    <Compile Include="../../Content/Projectiles/Melee/*.cs" />
+    <Compile Include="../../Content/Items/Weapons/Melee/BaseSwingItem.cs" />
+    <Compile Include="../../Content/Items/Weapons/Melee/LongSword.cs" />
+    <Compile Include="../../Core/Players/SwingComboPlayer.cs" />
+    <Compile Include="../../Core/Combat/ComboManager.cs" />
+    <Compile Include="../../Core/Graphics/SwingTrailShaderSystem.cs" />
+    <Compile Include="../../Primitive/SwingShaderTrail.cs" />
+    <Compile Include="Program.cs" />
+    <Compile Include="Examples.cs" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,12 @@
+C:\Users\User\เอกสาร\My Games\Terraria\tModLoader\ModSources\GuildArsenal\obj\Debug\net8.0\GuildArsenal.csproj.AssemblyReference.cache
+C:\Users\User\เอกสาร\My Games\Terraria\tModLoader\ModSources\GuildArsenal\obj\Debug\net8.0\GuildArsenal.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\User\เอกสาร\My Games\Terraria\tModLoader\ModSources\GuildArsenal\obj\Debug\net8.0\GuildArsenal.AssemblyInfoInputs.cache
+C:\Users\User\เอกสาร\My Games\Terraria\tModLoader\ModSources\GuildArsenal\obj\Debug\net8.0\GuildArsenal.AssemblyInfo.cs
+C:\Users\User\เอกสาร\My Games\Terraria\tModLoader\ModSources\GuildArsenal\obj\Debug\net8.0\GuildArsenal.csproj.CoreCompileInputs.cache
+C:\Users\User\เอกสาร\My Games\Terraria\tModLoader\ModSources\GuildArsenal\bin\Debug\net8.0\GuildArsenal.deps.json
+C:\Users\User\เอกสาร\My Games\Terraria\tModLoader\ModSources\GuildArsenal\bin\Debug\net8.0\GuildArsenal.dll
+C:\Users\User\เอกสาร\My Games\Terraria\tModLoader\ModSources\GuildArsenal\bin\Debug\net8.0\GuildArsenal.pdb
+C:\Users\User\เอกสาร\My Games\Terraria\tModLoader\ModSources\GuildArsenal\obj\Debug\net8.0\GuildArsenal.dll
+C:\Users\User\เอกสาร\My Games\Terraria\tModLoader\ModSources\GuildArsenal\obj\Debug\net8.0\refint\GuildArsenal.dll
+C:\Users\User\เอกสาร\My Games\Terraria\tModLoader\ModSources\GuildArsenal\obj\Debug\net8.0\GuildArsenal.pdb
+C:\Users\User\เอกสาร\My Games\Terraria\tModLoader\ModSources\GuildArsenal\obj\Debug\net8.0\ref\GuildArsenal.dll

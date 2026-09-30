@@ -1,0 +1,2 @@
+Monster Hunter-inspired weapons for Terraria.
+The first weapon is the Hunter's Long Sword, with a custom three-hit left-click combo.

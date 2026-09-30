@@ -1,0 +1,3 @@
+displayName = The Guild&#39;s Arsenal
+author = IPao69
+version = 0.1

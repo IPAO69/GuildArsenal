@@ -1,0 +1,54 @@
+Mods: {
+	GuildArsenal: {
+		Items: {
+			LongSword: {
+				DisplayName: Hunter's Long Sword
+				Tooltip:
+					'''
+					A Monster Hunter-inspired long sword
+					Left click: overhead slash, thrust, rising slash
+					Click again after each attack to continue the combo
+					Thrust is a quick forward stab with reduced damage
+					The combo resets after 1.5 seconds without attacking
+					'''
+			}
+		}
+
+		Projectiles.LongSwordSwing.DisplayName: Long Sword
+	}
+}
+
+Items: {
+	LongSword: {
+		DisplayName: Long Sword
+		Tooltip: ""
+	}
+}
+
+Projectiles.LongSwordSwing.DisplayName: Long Sword Swing
+
+Configs: {
+	GuildArsenalConfig: {
+		DisplayName: Guild Arsenal Config
+
+		Tier1MaxMana: {
+			Label: Tier1 Max Mana
+			Tooltip: ""
+		}
+
+		Tier2MaxMana: {
+			Label: Tier2 Max Mana
+			Tooltip: ""
+		}
+
+		Tier3MaxMana: {
+			Label: Tier3 Max Mana
+			Tooltip: ""
+		}
+
+		ManaCostPercent: {
+			Label: Mana Cost Percent
+			Tooltip: ""
+		}
+	}
+}
